@@ -1,8 +1,8 @@
-/Users/johannes/Documents/Bitwig Studio/Java/Linnstrument ClipLauncherJava/src/main/java/com/theslowgrowth/LEDBuffer.java
-/Users/johannes/Documents/Bitwig Studio/Java/Linnstrument ClipLauncherJava/src/main/java/com/theslowgrowth/LinnstrumentClipLauncherExtension.java
-/Users/johannes/Documents/Bitwig Studio/Java/Linnstrument ClipLauncherJava/src/main/java/com/theslowgrowth/Color.java
-/Users/johannes/Documents/Bitwig Studio/Java/Linnstrument ClipLauncherJava/src/main/java/com/theslowgrowth/LinnstrumentPage.java
-/Users/johannes/Documents/Bitwig Studio/Java/Linnstrument ClipLauncherJava/src/main/java/com/theslowgrowth/BlinkTimer.java
-/Users/johannes/Documents/Bitwig Studio/Java/Linnstrument ClipLauncherJava/src/main/java/com/theslowgrowth/LinnstrumentClipLauncherExtensionDefinition.java
-/Users/johannes/Documents/Bitwig Studio/Java/Linnstrument ClipLauncherJava/src/main/java/com/theslowgrowth/ClipState.java
-/Users/johannes/Documents/Bitwig Studio/Java/Linnstrument ClipLauncherJava/src/main/java/com/theslowgrowth/ClipLauncherPage.java
+/Users/johannes/Documents/Bitwig Studio/Java/LinnStrumentClipLauncher/src/main/java/com/theslowgrowth/LinnstrumentClipLauncherExtension.java
+/Users/johannes/Documents/Bitwig Studio/Java/LinnStrumentClipLauncher/src/main/java/com/theslowgrowth/LinnstrumentPage.java
+/Users/johannes/Documents/Bitwig Studio/Java/LinnStrumentClipLauncher/src/main/java/com/theslowgrowth/ClipLauncherPage.java
+/Users/johannes/Documents/Bitwig Studio/Java/LinnStrumentClipLauncher/src/main/java/com/theslowgrowth/LEDBuffer.java
+/Users/johannes/Documents/Bitwig Studio/Java/LinnStrumentClipLauncher/src/main/java/com/theslowgrowth/BlinkTimer.java
+/Users/johannes/Documents/Bitwig Studio/Java/LinnStrumentClipLauncher/src/main/java/com/theslowgrowth/ClipState.java
+/Users/johannes/Documents/Bitwig Studio/Java/LinnStrumentClipLauncher/src/main/java/com/theslowgrowth/Color.java
+/Users/johannes/Documents/Bitwig Studio/Java/LinnStrumentClipLauncher/src/main/java/com/theslowgrowth/LinnstrumentClipLauncherExtensionDefinition.java

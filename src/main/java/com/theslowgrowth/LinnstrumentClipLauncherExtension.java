@@ -52,6 +52,7 @@ public class LinnstrumentClipLauncherExtension extends ControllerExtension {
         host_.getMidiInPort(0).setMidiCallback((ShortMidiMessageReceivedCallback) msg -> onMidi0(msg));
         midiOut_ = host_.getMidiOutPort(0);
         noteInput_ = host_.getMidiInPort(0).createNoteInput("");
+        application_ = host_.createApplication();
 
         // Load settings //////////////////////////////////////////
 
@@ -72,7 +73,10 @@ public class LinnstrumentClipLauncherExtension extends ControllerExtension {
         configureUserButton2((int) (button2CC.get() * (USERBUTTONCCMAX - USERBUTTONCCMIN) + USERBUTTONCCMIN));
         // finish recording when changing back to clip launcher
         SettableEnumValue finishOnChangeBack = host_.getPreferences().getEnumSetting("Finish Rec when changing back to clip launcher", "Behaviour", new String[]{"Yes", "No"}, "Yes");
-
+        // select the default mode of the low row
+        SettableEnumValue defaultLowRowMode = host_.getPreferences().getEnumSetting("Low row mode on startup", "Behaviour", new String[]{"Stop Track", "Select Track"}, "Stop Track");
+        //getHost().println("Low Row Mode: " + defaultLowRowMode.get());
+        // TODO: none of these settings show their actual value - the value is only available asynchronously after init() is finished. Workaround?
         // Late Init //////////////////////////
 
         buffer_ = new LEDBuffer(deviceWidth, 8);
@@ -82,14 +86,13 @@ public class LinnstrumentClipLauncherExtension extends ControllerExtension {
         transport_.getPosition().markInterested();
         transport_.tempo().value().markInterested();
 
-        host_.println("bend range" + (int) bendRange_.get() + ", " + bendRange_.get());
         noteInput_.setUseExpressiveMidi(true, Integer.parseInt(baseChannel_.get()) - 1, (int) bendRange_.get());
         noteInput_.setShouldConsumeEvents(false);
 
         sendInitializationMessages();
 
         boolean finish = finishOnChangeBack.get().equals("Yes");
-        clipLauncher_ = new ClipLauncherPage(deviceWidth, 8, this, finish);
+        clipLauncher_ = new ClipLauncherPage(deviceWidth, 8, this, finish, defaultLowRowMode.get());
 
         changePage(null); // enter normal linnstrument mode
 
@@ -330,9 +333,11 @@ public class LinnstrumentClipLauncherExtension extends ControllerExtension {
     {
         return transport_;
     }
+    public Application getApplication() { return application_; }
 
     private NoteInput noteInput_;
     private Transport transport_;
+    private Application application_;
     private LinnstrumentPage page_ = null;
     private LEDBuffer buffer_;
     private ControllerHost host_ = getHost();

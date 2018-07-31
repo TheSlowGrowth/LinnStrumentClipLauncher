@@ -3,12 +3,11 @@ package com.theslowgrowth;
 import com.bitwig.extension.callback.ClipLauncherSlotBankPlaybackStateChangedCallback;
 import com.bitwig.extension.callback.IndexedBooleanValueChangedCallback;
 import com.bitwig.extension.callback.IndexedColorValueChangedCallback;
-import com.bitwig.extension.controller.api.ClipLauncherSlotBank;
-import com.bitwig.extension.controller.api.Track;
-import com.bitwig.extension.controller.api.TrackBank;
+import com.bitwig.extension.callback.IntegerValueChangedCallback;
+import com.bitwig.extension.controller.api.*;
 
 public class ClipLauncherPage extends LinnstrumentPage {
-    ClipLauncherPage(int width, int height, LinnstrumentClipLauncherExtension parent, boolean stopRecOnShowPage)
+    ClipLauncherPage(int width, int height, LinnstrumentClipLauncherExtension parent, boolean stopRecOnShowPage, String initialLowRowMode)
     {
         super(width, height, parent);
 
@@ -16,11 +15,12 @@ public class ClipLauncherPage extends LinnstrumentPage {
 
         numTracksVisible_ = width - 1 /* navigation column */- 1 /* scene column */ - 2 /* navigation columns */;
         numScenesVisible_ = height - 1 /* stop row */;
-        stopRowY_ = height - 1;
+        lowRowY_ = height - 1;
         sceneLaunchX_ = width - 2;
         scrollColRightX_ = width - 1;
 
-        duplicate_ = false;
+        currentCursorTrackLEDIndex_ = -1;
+
         switchMode(Mode.LAUNCH);
 
         finishRecOnShowPage_ = stopRecOnShowPage;
@@ -32,15 +32,21 @@ public class ClipLauncherPage extends LinnstrumentPage {
         clipStates_ = new ClipState[numTracksVisible_][numScenesVisible_];
         hasContent_ = new boolean[numTracksVisible_][numScenesVisible_];
         clipColors_ = new Color[numTracksVisible_][numScenesVisible_];
+
+        cursorTrack_ = parent.getHost().createCursorTrack(0,0);
+        cursorTrack_.position().markInterested();
         trackBank_ = parent.getHost().createMainTrackBank(numTracksVisible_, 0, numScenesVisible_);
-        trackBank_.scrollPosition().markInterested();
+        trackBank_.followCursorTrack (cursorTrack_);
+        trackBank_.scrollPosition().markInterested(); // TODO: required? We'll have an observer running (see below)
+        trackBank_.cursorIndex().markInterested();
+        trackBank_.channelCount().markInterested();
         trackBank_.sceneBank().scrollPosition().markInterested();
         for(int t = 0; t < numTracksVisible_; t++)
         {
             ClipLauncherSlotBank clipLauncher = trackBank_.getItemAt(t).clipLauncherSlotBank();
-            clipLauncher.addHasContentObserver(new HasContentObserver(this, t));
-            clipLauncher.addPlaybackStateObserver(new PlaybackStateObserver(this, t));
-            clipLauncher.addColorObserver(new ColorObserver(this, t));
+            clipLauncher.addHasContentObserver(new HasContentObserver(t));
+            clipLauncher.addPlaybackStateObserver(new PlaybackStateObserver(t));
+            clipLauncher.addColorObserver(new ColorObserver(t));
             for (int s = 0; s < numScenesVisible_; s++)
             {
                 clipStates_[t][s] = new ClipState();
@@ -69,9 +75,13 @@ public class ClipLauncherPage extends LinnstrumentPage {
             setLED(sceneLaunchX_, y, Color.CYAN);
         }
 
-        // set the stop leds
-        for (int x = CLIPSSTARTX; x <= sceneLaunchX_; x++)
-            setLED(x, stopRowY_, Color.RED);
+        if (initialLowRowMode.equals("Select Track"))
+            switchLowRowMode(LowRowMode.SELECT);
+        else
+            switchLowRowMode(LowRowMode.STOP);
+
+        trackBank_.cursorIndex().addValueObserver(new CursorTrackObserver(), -1);
+        trackBank_.scrollPosition().addValueObserver(new TrackBankScrollPositionObserver());
     }
 
     @Override
@@ -83,7 +93,7 @@ public class ClipLauncherPage extends LinnstrumentPage {
             track.clipLauncherSlotBank().setIndication(true);
         }
         timer_.setActive(true);
-        setDuplicateMode(false);
+        switchMode(Mode.LAUNCH);
 
         // finish recording when this setting is enabled
         if ((finishRecOnShowPage_) && (currentlyRecording_))
@@ -124,9 +134,19 @@ public class ClipLauncherPage extends LinnstrumentPage {
                 else
                     switchMode(Mode.DELETE);
             }
-            else if (y == DUPLICATEBTTNY)
+            else if (y == COPYBTTNY)
             {
-                setDuplicateMode(!duplicate_);
+                if (modeIsCopyMode(mode_))
+                    switchMode(Mode.LAUNCH);
+                else
+                    switchMode(Mode.COPYSELSOURCE);
+            }
+            else if (y == LOWROWMODEBTTNY)
+            {
+                if (lowRowMode_ == LowRowMode.STOP)
+                    switchLowRowMode(LowRowMode.SELECT);
+                else
+                    switchLowRowMode(LowRowMode.STOP);
             }
         }
         // a cell in the scroll columns has been pressed
@@ -158,17 +178,46 @@ public class ClipLauncherPage extends LinnstrumentPage {
         // a cell in the scene launcher column has been pressed
         else if (x == sceneLaunchX_)
         {
-            if (y == stopRowY_)
+            if (y == lowRowY_)
             {
-                for(int t = 0; t < numTracksVisible_; t++)
-                    trackBank_.getItemAt(t).clipLauncherSlotBank().stop();
+                if (mode_ == Mode.COPYSELSOURCE)
+                {
+                    getParent().getApplication().getAction("Create Scene From Playing Launcher Clips").invoke();
+                    switchMode(Mode.LAUNCH);
+                }
+                else
+                {
+                    for (int t = 0; t < numTracksVisible_; t++)
+                        trackBank_.getItemAt(t).clipLauncherSlotBank().stop();
+                }
             }
             else
             {
-                if (duplicate_)
+                if (mode_ == Mode.DELETE)
                 {
-                    // TODO: Duplicate scenes. How?!
-                    // trackBank_.sceneBank().
+                    // TODO: check if this deletes the scene
+                    trackBank_.sceneBank().getItemAt(y).selectInEditor();
+                    getParent().getApplication().remove();
+                }
+                else if (mode_ == Mode.COPYSELSOURCE)
+                {
+                    copyBufferScene_ = trackBank_.sceneBank().getItemAt(y);
+                    switchMode(Mode.COPYSELDESTSCENE);
+                }
+                else if ((mode_ == Mode.COPYSELDESTSCENE) && (copyBufferScene_ != null))
+                {
+                    Scene s = trackBank_.sceneBank().getItemAt(y);
+                    if (s != copyBufferScene_)
+                        s.copyFrom(copyBufferScene_);
+                    else
+                    {
+                        // TODO: check if this duplicates the scene - no it doesn't
+                        trackBank_.sceneBank().getItemAt(y).selectInEditor();
+                        //getParent().getApplication().duplicate();
+                        getParent().getApplication().getAction("Duplicate Special").invoke();
+                    }
+
+                    switchMode(Mode.LAUNCH);
                 }
                 else
                     trackBank_.sceneBank().launchScene(y);
@@ -176,10 +225,17 @@ public class ClipLauncherPage extends LinnstrumentPage {
 
         }
         // a cell in the low row has been pressed (stop clips)
-        else if (y == stopRowY_)
+        else if (y == lowRowY_)
         {
             int cellX = x - CLIPSSTARTX;
-            trackBank_.getItemAt(cellX).clipLauncherSlotBank().stop();
+            if (lowRowMode_ == LowRowMode.STOP)
+            {
+                trackBank_.getItemAt(cellX).clipLauncherSlotBank().stop();
+            }
+            else if (lowRowMode_ == LowRowMode.SELECT)
+            {
+                trackBank_.getItemAt(cellX).selectInEditor();
+            }
         }
         // a clip cell has been pressed
         else if ((x >= CLIPSSTARTX) && (x < CLIPSSTARTX + numTracksVisible_))
@@ -188,9 +244,14 @@ public class ClipLauncherPage extends LinnstrumentPage {
             Track track = trackBank_.getItemAt(cellX);
 
             // duplicate mode //////////////////
-            if (duplicate_) {
-                track.clipLauncherSlotBank().duplicateClip(y);
-                setDuplicateMode(false);
+            if (mode_ == Mode.COPYSELSOURCE) {
+                copyBufferClip_ = track.clipLauncherSlotBank().getItemAt(y);
+                switchMode(Mode.COPYSELDESTCLIP);
+            }
+            else if ((mode_ == Mode.COPYSELDESTCLIP) && (copyBufferClip_ != null)) {
+                ClipLauncherSlot c = track.clipLauncherSlotBank().getItemAt(y);
+                c.copyFrom(copyBufferClip_);
+                switchMode(Mode.LAUNCH);
             }
             // record mode //////////////////
             else if (mode_ == Mode.RECORD)
@@ -262,19 +323,16 @@ public class ClipLauncherPage extends LinnstrumentPage {
         finishRecOnShowPage_ = shouldStopRecOnShowPage;
     }
 
-    private void setDuplicateMode(boolean shouldEnableDuplicating)
-    {
-        duplicate_ = shouldEnableDuplicating;
-        if (duplicate_)
-            timer_.addTask(new BlinkTimer.BlinkTask(0, DUPLICATEBTTNY, Color.OFF, Color.GREEN, BlinkTimer.BlinkSpeed._16TH));
-        else {
-            timer_.removeTask(new BlinkTimer.BlinkTask(0, DUPLICATEBTTNY, Color.OFF, Color.GREEN, BlinkTimer.BlinkSpeed._16TH));
-            setLED(0, DUPLICATEBTTNY, Color.OFF);
-        }
-    }
-
     private void switchMode(Mode m) {
+        // in case we switch our of a copy mode, remove the blinking task
+        if (modeIsCopyMode(mode_) && !modeIsCopyMode(m))
+        {
+            timer_.removeTask(new BlinkTimer.BlinkTask(0, COPYBTTNY, Color.OFF, Color.GREEN, BlinkTimer.BlinkSpeed._16TH));
+            setLED(0, COPYBTTNY, Color.OFF);
+        }
+
         mode_ = m;
+
         if (mode_ == Mode.LAUNCH)
         {
             setLED(0, RECORDBTTNY, Color.OFF);
@@ -289,6 +347,9 @@ public class ClipLauncherPage extends LinnstrumentPage {
         else if (mode_== Mode.DELETE) {
             setLED(0, RECORDBTTNY, Color.OFF);
             timer_.addTask(new BlinkTimer.BlinkTask(0, DELETEBTTNY, Color.OFF, Color.RED, BlinkTimer.BlinkSpeed._16TH));
+        }
+        else if (mode_ == Mode.COPYSELSOURCE) {
+            timer_.addTask(new BlinkTimer.BlinkTask(0, COPYBTTNY, Color.OFF, Color.GREEN, BlinkTimer.BlinkSpeed._16TH));
         }
     }
 
@@ -331,27 +392,73 @@ public class ClipLauncherPage extends LinnstrumentPage {
         }
     }
 
+    private void switchLowRowMode(LowRowMode newMode)
+    {
+        if (newMode == LowRowMode.STOP)
+        {
+            // set the leds to red
+            for (int x = CLIPSSTARTX; x <= sceneLaunchX_; x++)
+                setLED(x, lowRowY_, Color.RED);
+        }
+        else if (newMode == LowRowMode.SELECT)
+        {
+            // set the leds to cyan
+            for (int x = CLIPSSTARTX; x < sceneLaunchX_; x++)
+                setLED(x, lowRowY_, Color.CYAN);
+
+            if (currentCursorTrackLEDIndex_ >= 0)
+            {
+                setLED(CLIPSSTARTX + currentCursorTrackLEDIndex_, lowRowY_, Color.BLUE);
+            }
+            setLED(sceneLaunchX_, lowRowY_, Color.RED); // stop all will still be available
+        }
+        lowRowMode_ = newMode;
+    }
+
+    private void updateCursorTrackLED(int newCursorTrackIndex)
+    {
+        int oldCursorTrackIndex = currentCursorTrackLEDIndex_;
+        currentCursorTrackLEDIndex_ = newCursorTrackIndex;
+
+        if (lowRowMode_ == LowRowMode.SELECT)
+        {
+            if (oldCursorTrackIndex >= 0)
+            {
+                setLED(CLIPSSTARTX + oldCursorTrackIndex, lowRowY_, Color.CYAN);
+            }
+
+            if (currentCursorTrackLEDIndex_ >= 0)
+            {
+                setLED(CLIPSSTARTX + newCursorTrackIndex, lowRowY_, Color.BLUE);
+            }
+        }
+    }
+
+    private boolean modeIsCopyMode(Mode m)
+    {
+        return ((m == Mode.COPYSELSOURCE)
+                || (m == Mode.COPYSELDESTCLIP)
+                || (m == Mode.COPYSELDESTSCENE));
+    }
+
     private class HasContentObserver implements IndexedBooleanValueChangedCallback
     {
-        HasContentObserver(ClipLauncherPage parent, int track)
+        HasContentObserver(int track)
         {
-            parent_ = parent;
             track_ = track;
         }
         public void valueChanged(int scene, boolean hasContent)
         {
-            parent_.hasContent_[track_][scene] = hasContent;
-            parent_.updateClipLED(track_, scene);
+            hasContent_[track_][scene] = hasContent;
+            updateClipLED(track_, scene);
         }
-        private ClipLauncherPage parent_;
         private int track_;
     }
 
     private class PlaybackStateObserver implements ClipLauncherSlotBankPlaybackStateChangedCallback
     {
-        PlaybackStateObserver(ClipLauncherPage parent, int track)
+        PlaybackStateObserver(int track)
         {
-            parent_ = parent;
             track_ = track;
         }
         public void playbackStateChanged(int slotIndex, int playbackState, boolean isQueued) {
@@ -359,75 +466,97 @@ public class ClipLauncherPage extends LinnstrumentPage {
             if (isQueued) {
                 switch (playbackState) {
                     case 0:
-                        parent_.clipStates_[track_][slotIndex].queuedState = ClipState.State.STOPPED;
+                        clipStates_[track_][slotIndex].queuedState = ClipState.State.STOPPED;
                         break;
                     case 1:
-                        parent_.clipStates_[track_][slotIndex].queuedState = ClipState.State.PLAYING;
+                        clipStates_[track_][slotIndex].queuedState = ClipState.State.PLAYING;
                         break;
                     case 2:
-                        parent_.clipStates_[track_][slotIndex].queuedState = ClipState.State.RECORDING;
+                        clipStates_[track_][slotIndex].queuedState = ClipState.State.RECORDING;
                         break;
                 }
             } else {
                 switch (playbackState) {
                     case 0:
-                        parent_.clipStates_[track_][slotIndex].currentState = ClipState.State.STOPPED;
+                        clipStates_[track_][slotIndex].currentState = ClipState.State.STOPPED;
                         // bitwig doesn't send this
-                        parent_.clipStates_[track_][slotIndex].queuedState = ClipState.State.STOPPED;
+                        clipStates_[track_][slotIndex].queuedState = ClipState.State.STOPPED;
                         break;
                     case 1:
-                        parent_.clipStates_[track_][slotIndex].currentState = ClipState.State.PLAYING;
+                        clipStates_[track_][slotIndex].currentState = ClipState.State.PLAYING;
                         // bitwig doesn't send this
-                        parent_.clipStates_[track_][slotIndex].queuedState = ClipState.State.PLAYING;
+                        clipStates_[track_][slotIndex].queuedState = ClipState.State.PLAYING;
                         break;
                     case 2:
-                        parent_.clipStates_[track_][slotIndex].currentState = ClipState.State.RECORDING;
+                        clipStates_[track_][slotIndex].currentState = ClipState.State.RECORDING;
                         // bitwig doesn't send this
-                        parent_.clipStates_[track_][slotIndex].queuedState = ClipState.State.RECORDING;
+                        clipStates_[track_][slotIndex].queuedState = ClipState.State.RECORDING;
                         break;
                 }
             }
-            parent_.updateClipLED(track_, slotIndex);
+            updateClipLED(track_, slotIndex);
         }
-        private ClipLauncherPage parent_;
         private int track_;
     }
 
     private class ColorObserver implements IndexedColorValueChangedCallback
     {
-        ColorObserver(ClipLauncherPage parent, int track)
+        ColorObserver(int track)
         {
-            parent_ = parent;
             track_ = track;
         }
+
+        @Override
         public void valueChanged(int scene, float red, float green, float blue)
         {
             Color c = Color.fromRGB(red, green, blue);
-            parent_.clipColors_[track_][scene] = c;
-            parent_.updateClipLED(track_, scene);
+            clipColors_[track_][scene] = c;
+            updateClipLED(track_, scene);
         }
-        private ClipLauncherPage parent_;
         private int track_;
+    }
+    private class CursorTrackObserver implements IntegerValueChangedCallback
+    {
+        @Override
+        public void valueChanged(int newValue) {
+            updateCursorTrackLED(newValue);
+        }
+    }
+
+    private class TrackBankScrollPositionObserver implements IntegerValueChangedCallback
+    {
+        @Override
+        public void valueChanged(int newValue) {
+            updateCursorTrackLED(trackBank_.cursorIndex().get());
+        }
     }
 
     private TrackBank recordBank_; // used to be able to access cells into which is being recorded,
                                    // even if the main track bank scrolls around
     private TrackBank trackBank_;
+    private CursorTrack cursorTrack_;
     private BlinkTimer timer_;
     private ClipState[][] clipStates_;
     private boolean[][] hasContent_;
     private Color[][] clipColors_;
-    private enum Mode { LAUNCH, RECORD, DELETE }
+    private enum Mode { LAUNCH, RECORD, DELETE, COPYSELSOURCE, COPYSELDESTCLIP, COPYSELDESTSCENE }
     private Mode mode_;
-    private boolean duplicate_;
+    private enum LowRowMode { STOP, SELECT }
+    private LowRowMode lowRowMode_;
+    private int currentCursorTrackLEDIndex_;
     private boolean finishRecOnShowPage_;
     private int numScenesVisible_;
     private int numTracksVisible_;
     private boolean currentlyRecording_;
 
+    private Scene copyBufferScene_;
+    private ClipLauncherSlot copyBufferClip_;
+
     private static final int RECORDBTTNY = 0;
-    private static final int DUPLICATEBTTNY = 1;
+    private static final int COPYBTTNY = 1;
     private static final int DELETEBTTNY = 2;
+    private static final int LOWROWMODEBTTNY = 3;
+    
     private static final int SCROLLUPBTTNY = 0;
     private static final int SCROLLUPPAGEBTTNY = 1;
     private static final int SCROLLDOWNBTTNY = 7;
@@ -438,6 +567,6 @@ public class ClipLauncherPage extends LinnstrumentPage {
     private static int scrollColRightX_ = 0;
     private static int sceneLaunchX_ = 0;
     private static final int CLIPSSTARTX = 2;
-    private static int stopRowY_ = 7;
+    private static int lowRowY_ = 7;
 
 }
